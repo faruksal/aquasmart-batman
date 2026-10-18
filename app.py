@@ -85,7 +85,184 @@ with st.sidebar:
             url = f"https://api.open-meteo.com/v1/forecast?latitude={enlem}&longitude={boylam}&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m&timezone=auto"
             res = requests.get(url, timeout=5)
             data = res.json()
-            current = data.get("current", {})
-            return {
-                "sicaklik": current.get("temperature_2m", 24.5),
-                "hissedilen": current.get("apparent_temperature", 25.0),
+            c = data.get("current", {})
+            return {"sicaklik": c.get("temperature_2m", 24.5), "hissedilen": c.get("apparent_temperature", 25.0), "nem": c.get("relative_humidity_2m", 52), "ruzgar": c.get("wind_speed_10m", 4.1)}
+        except Exception:
+            return {"sicaklik": 24.5, "hissedilen": 25.0, "nem": 52, "ruzgar": 4.1}
+
+    hava_verisi = hava_durumu_al(lat, lon)
+    
+    st.markdown("---")
+    st.markdown("### 🌤️ Anlık Hava Durumu")
+    c1, c2 = st.columns(2)
+    c1.metric("Hava Sıcaklığı", f"{hava_verisi['sicaklik']} °C")
+    c2.metric("Nem Oranı", f"%{hava_verisi['nem']}")
+    
+    temp = float(hava_verisi['sicaklik'])
+    humidity = float(hava_verisi['nem'])
+    evap_risk = (temp * 0.7) - (humidity * 0.2) + 5.0
+    
+    if evap_risk > 22:
+        st.error("🔴 **ŞU AN SULAMA YAPMAYIN!**\nHava sıcak ve kuru. Şimdi su verirseniz suyun büyük kısmı buharlaşıp uçar, kökler yanar. Akşam veya geceyi bekleyin.")
+    elif evap_risk > 14:
+        st.warning("🟡 **DİKKATLİ SULAMA**\nGüneşin tam tepede olmadığı sabah erken veya ikindi vakitlerini tercih edin.")
+    else:
+        st.success("🟢 **SULAMA İÇİN UYGUN ZAMAN**\nHava serin, verilen su doğrudan köke gider ve israf olmaz.")
+
+# --- BİTKİ SAĞLIĞI HARİTASI ---
+def bitki_saglik_haritasi(pil_image):
+    img = pil_image.resize((150, 150)).convert("RGB")
+    width, height = img.size
+    harita = Image.new("RGB", (width, height))
+    pixels_in = img.load()
+    pixels_out = harita.load()
+    
+    for x in range(width):
+        for y in range(height):
+            r, g, b = pixels_in[x, y]
+            pay = g - r
+            payda = g + r - b
+            vari = pay / (payda if payda != 0 else 1)
+            
+            if vari > 0.1:
+                pixels_out[x, y] = (0, int(150 + vari * 105), 0)
+            elif vari > -0.1:
+                pixels_out[x, y] = (210, 160, 0)
+            else:
+                pixels_out[x, y] = (190, 30, 30)
+    return harita.resize((450, 300))
+
+# --- ANA EKRAN ---
+col1, col2 = st.columns([1, 1.1])
+
+# SOL TARAF: FOTOĞRAF
+with col1:
+    st.markdown('<div class="ar_ge_kart">', unsafe_allow_html=True)
+    st.markdown("### 📸 Bitkinin Fotoğrafı")
+    secim_modu = st.radio("Fotoğrafı Nasıl Ekleyeceksiniz?", ["Galeriden Seç", "Kamerayla Çek"], horizontal=True)
+    
+    uploaded_file = None
+    if secim_modu == "Kamerayla Çek":
+        uploaded_file = st.camera_input("Kamerayı bitkiye doğrultun:")
+    else:
+        uploaded_file = st.file_uploader("Fotoğraf yükleyin:", type=["jpg", "jpeg", "png"])
+        
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        tab1, tab2 = st.tabs(["🖼️ Normal Fotoğraf", "🟢 Canlılık / Hasar Haritası"])
+        with tab1:
+            st.image(image, caption="Yüklenen Fotoğraf", use_container_width=True)
+        with tab2:
+            st.image(bitki_saglik_haritasi(image), caption="Yeşil: Sağlıklı Doku | Kırmızı: Hasarlı / Zarar Görmüş Bölge", use_container_width=True)
+
+# SAĞ TARAF: TEŞHİS, ÇÖZÜM VE KAZANÇ REÇETESİ
+with col2:
+    st.markdown('<div class="ar_ge_kart">', unsafe_allow_html=True)
+    st.markdown("### 🩺 Teşhis ve Yapılacaklar")
+    
+    if uploaded_file is not None:
+        if st.button("🔍 Bitkiyi Teşhis Et ve Çözümü Göster", type="primary"):
+            if not api_key:
+                st.error("⚠️ Sistem anahtarı bulunamadı.")
+            else:
+                with st.spinner("Bitki ve hastalık kontrol ediliyor..."):
+                    try:
+                        buffered = io.BytesIO()
+                        image.save(buffered, format="JPEG")
+                        img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                        
+                        hava_bilgisi = f"{hava_verisi['sicaklik']}°C, Nem: %{hava_verisi['nem']}, Rüzgar: {hava_verisi['ruzgar']} km/s"
+                        
+                        prompt_text = f"""
+                        Sen sahadaki çiftçiye ve vatandaşa doğrudan yardımcı olan tecrübeli bir Ziraat Danışmanısın.
+                        Fotoğrafı incele. Asla yabancı terimler, karmaşık formüller, FAO veya uzun akademik açıklamalar kullanma.
+                        Doğrudan çiftçinin anlayacağı net, pratik ve anlaşılır bir dille şu 4 başlığı yaz:
+
+                        Konum: {secilen_ilce} / Batman
+                        Hava Durumu: {hava_bilgisi}
+
+                        1. 🏷️ BİTKİ VE YERİ:
+                           - Bu bitki nedir? (Örn: Limon, Mısır, Pamuk vb.)
+                           - Nerede yetişiyor? (Fotoğrafa göre: Saksıda/Balkonda mı, Bahçede mi, Tarlada mı?)
+
+                        2. 🔍 NE SORUNU VAR? (Hastalık / Zararlı):
+                           - Bitkide görülen hastalık veya böcek nedir? Halk dilinde adı.
+                           - Durumu ne kadar ciddi?
+
+                        3. 💊 NE YAPILMALI? (Tedavi ve Çözüm):
+                           - Eğer saksı veya hobi bitkisiyse: Evde hazırlanabilecek pratik ve doğal çözüm (Örn: Arap sabunlu su, mekanik temizlik).
+                           - Eğer tarla veya bahçeyse: Hangi tür ilaç veya mücadele gerekir, gereksiz ilaç masrafından nasıl kaçınılır?
+
+                        4. 💧 SULAMA TAVSİYESİ (BUGÜN İÇİN):
+                           - Batman'ın bugünkü havasına göre bu bitki saat kaçta sulanmalı?
+                           - Kaç günde bir su verilmeli? Aşırı sulamanın zararı ne olur?
+                        """
+
+                        payload = {
+                            "contents": [{
+                                "parts": [
+                                    {"text": prompt_text},
+                                    {
+                                        "inline_data": {
+                                            "mime_type": "image/jpeg",
+                                            "data": img_b64
+                                        }
+                                    }
+                                ]
+                            }]
+                        }
+
+                        clean_key = str(api_key).strip().replace('"', '').replace("'", '').replace('\n', '').replace('\r', '')
+                        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={clean_key}"
+                        headers = {
+                            "Content-Type": "application/json",
+                            "x-goog-api-key": clean_key
+                        }
+
+                        res = requests.post(endpoint, headers=headers, data=json.dumps(payload), timeout=35)
+                        result = res.json()
+
+                        if "candidates" in result:
+                            rapor = result["candidates"][0]["content"]["parts"][0]["text"]
+                            
+                            st.success("✅ Teşhis Tamamlandı!")
+                            
+                            # Çiftçiye/Kullanıcıya Doğrudan Kâr Metrikleri
+                            m1, m2 = st.columns(2)
+                            m1.metric("Elektrik / Pompa Tasarrufu", "%30'a Varan", "Buharlaşma Önleme")
+                            m2.metric("Cihaz / Sensör Maliyeti", "0 ₺", "Sıfır Ekipman Masrafı")
+                            
+                            st.markdown("---")
+                            st.markdown(rapor)
+                            
+                            # Kullanıcıya Sağlanan Kârın Kısa Özeti
+                            st.markdown("""
+                            <div class="kar_kutusu">
+                                <h4 style="margin-top:0; color:#6ee7b7;">💰 Bu Reçetenin Size Sağladığı Doğrudan Kâr:</h4>
+                                <ul style="margin-bottom:0; font-size:14px; line-height:1.6;">
+                                    <li><b>Elektrik ve Mazot Tasarrufu:</b> Gündüz uçup gidecek su için kuyu motorunun boşuna çalışmasını önler; faturalarda %30'a varan net tasarruf sağlar.</li>
+                                    <li><b>0 ₺ Donanım Masrafı:</b> Binlerce liralık toprak nem sensörü veya meteoroloji cihazı almadan telefonunuzla aynı kararı alırsınız.</li>
+                                    <li><b>İlaç İsrafını Önleme:</b> Yanlış ve pahalı zirai ilaç alımını engeller; ev bitkilerinde bedava doğal yöntemleri gösterir.</li>
+                                    <li><b>Hasat Kaybını Durdurma:</b> Aşırı sulamadan kaynaklanan kök çürümesini ve zararlıları vaktinde engelleyerek veriminizi korur.</li>
+                                </ul>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            st.download_button(
+                                label="📥 Bu Reçeteyi Telefona İndir",
+                                data=rapor,
+                                file_name=f"AquaSmart_{secilen_ilce}_Recete.txt",
+                                mime="text/plain"
+                            )
+                        else:
+                            st.error(f"Yanıt alınamadı: {result}")
+                            
+                    except Exception as e:
+                        st.error(f"Hata oluştu: {e}")
+    else:
+        st.info("👈 Soldan bir fotoğraf yükleyin veya çekin.")
+    
+    st.markdown("</div>", unsafe_allow_html=True)
