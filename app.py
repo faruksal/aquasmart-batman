@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Temiz, Modern ve Ferah Tasarım
+# Temiz, Modern Tasarım
 st.markdown("""
 <style>
     .stApp {
@@ -60,10 +60,6 @@ st.markdown("""
 st.title("🌱 AquaSmart Batman")
 st.subheader("Akıllı Bitki Sağlığı ve Doğru Sulama Rehberi")
 
-# --- API ANAHTARI OKUMA ---
-raw_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
-api_key = str(raw_key).strip().replace('"', '').replace("'", '').replace('\n', '').replace('\r', '')
-
 # --- YAN MENÜ: KONUM VE CANLI HAVA DURUMU ---
 with st.sidebar:
     st.header("📍 Konum Seçimi")
@@ -109,13 +105,13 @@ with st.sidebar:
     evap_risk = (temp * 0.7) - (humidity * 0.2) + 5.0
     
     if evap_risk > 22:
-        st.error("🔴 **ŞU AN SULAMA YAPMAYIN!**\nHava sıcak ve kuru. Şimdi su verirseniz suyun büyük kısmı buharlaşıp uçar, kökler yanar. Akşam veya geceyi bekleyin.")
+        st.error("🔴 **ŞU AN SULAMA YAPMAYIN!**\nHava sıcak ve kuru. Şimdi su verirseniz buharlaşıp uçar, kökler yanar. Geceyi bekleyin.")
     elif evap_risk > 14:
         st.warning("🟡 **DİKKATLİ SULAMA**\nGüneşin tam tepede olmadığı sabah erken veya ikindi vakitlerini tercih edin.")
     else:
         st.success("🟢 **SULAMA İÇİN UYGUN ZAMAN**\nHava serin, verilen su doğrudan köke gider ve israf olmaz.")
 
-# --- BİTKİ SAĞLIĞI HARİTASI (VARI İNDEKSİ) ---
+# --- BİTKİ VE KLOROFİL ANALİZİ (VARI İNDEKSİ) ---
 def bitki_saglik_haritasi(pil_image):
     img = pil_image.resize((150, 150)).convert("RGB")
     width, height = img.size
@@ -124,6 +120,7 @@ def bitki_saglik_haritasi(pil_image):
     pixels_out = harita.load()
     
     hasar_sayisi = 0
+    klorofil_sayisi = 0
     toplam_piksel = width * height
     
     for x in range(width):
@@ -133,40 +130,63 @@ def bitki_saglik_haritasi(pil_image):
             payda = g + r - b
             vari = pay / (payda if payda != 0 else 1)
             
-            if vari > 0.1:
-                pixels_out[x, y] = (0, int(150 + vari * 105), 0)
-            elif vari > -0.1:
+            # Canlı bitki klorofil pikseli
+            if vari > 0.08 and g > r:
+                pixels_out[x, y] = (0, int(150 + min(vari * 105, 105)), 0)
+                klorofil_sayisi += 1
+            elif vari > -0.08:
                 pixels_out[x, y] = (210, 160, 0)
+                if g > 40:
+                    klorofil_sayisi += 0.5
             else:
                 pixels_out[x, y] = (190, 30, 30)
                 hasar_sayisi += 1
                 
+    bitki_orani = (klorofil_sayisi / toplam_piksel) * 100
     hasar_orani = (hasar_sayisi / toplam_piksel) * 100
-    return harita.resize((450, 300)), hasar_orani
+    return harita.resize((450, 300)), hasar_orani, bitki_orani
 
-# --- KESİNTİSİZ YEREL TEŞHİS MOTORU (GÜVENCE REÇETESİ) ---
-def yerel_recete_uret(ilce, hava, hasar_orani):
+# --- AKILLI VE DİNAMİK YEREL REÇETE MOTORU ---
+def dinamik_recete_uret(ilce, hava, hasar_orani, bitki_orani):
+    # 1. BİTKİ DEĞİLSE UYARI VER
+    if bitki_orani < 6.0:
+        return "BITKI_DEGIL"
+        
     saat_oneri = "21:30 - 05:00 saatleri arasında" if evap_risk > 14 else "06:30 - 09:00 saatleri arasında"
     
+    # 2. BİTKİ TÜRÜ VE ORTAM TAHMİNİ
+    if bitki_orani > 45.0:
+        tur = "Geniş Yapraklı Bitki / Tarla Mahsulü"
+        ortam = "Açık Alan / Bahçe veya Tarla Yetiştiriciliği"
+        tedavi = "* **Hedefli Mücadele:** Yapraklarda su stresi ve erken kloroz görülmektedir. Gereksiz kimyasal ilaç masrafı yapmayınız; toprağın havalanmasını sağlayın."
+    elif bitki_orani > 18.0:
+        tur = "Saksı / Balkon Süs Bitkisi"
+        ortam = "Saksı / İç Mekan Ortamı"
+        tedavi = "* **Ev Tipi Doğal Çözüm (0 ₺):** 1 litre dinlenmiş suya yarım çay kaşığı karbonat ve 2 damla saf zeytinyağı damlatarak fısfıslayınız. Gözenekleri açar ve mantar sporlarını engeller."
+    else:
+        tur = "Düşük Yoğunluklu Otsu Doku / Fidan"
+        ortam = "Peyzaj / Refüj veya Küçük Saksı"
+        tedavi = "* **Kök Koruma:** Saksı veya dikim çukurunun drenaj deliklerini kontrol ediniz. Durgun su kökleri boğar."
+
     return f"""### 🏷️ 1. BİTKİ VE YETİŞME ORTAMI
-* **Tespit Edilen Tür:** Turunçgil / Genç Fidan (*Citrus* grubu)
-* **Yetişme Alanı:** Plastik/Toprak Saksı (Balkon / İç Mekan Yetiştiriciliği)
-* **Doku Durumu:** Arka plan pikselleri ev tipi saksı toprağını ve balkon ortamını göstermektedir; açık tarla koşulları bulunmamaktadır.
+* **Tespit Edilen Tür Grubu:** {tur}
+* **Yetişme Alanı:** {ortam}
+* **Yeşil Doku Yoğunluğu:** %{bitki_orani:.1f} canlı bitkisel doku tespit edildi.
 
 ### 🔍 2. MEVCUT SORUN VE HASAR DERECESİ
-* **Teşhis:** Yaprak Ucu Yanıklığı (Marjinal Nekroz) ve Erken Dönem Klorofil Stresi
-* **Hasar Seviyesi:** %{hasar_orani:.1f} dokusal bozulma tespit edildi.
-* **Belirtiler:** Aşırı güneş radyasyonu ve kireçli/durgun sulama suyuna bağlı yaprak kenarlarında kuruma; rizosferik havalanma yetersizliği.
+* **Teşhis:** Yaprak Yanıklığı ve Klorofil Su Stresi
+* **Hasar Seviyesi:** %{hasar_orani:.1f} dokusal bozulma/kuruma mevcut.
+* **Belirtiler:** Yüksek sıcaklık ve düzensiz sulama kaynaklı yaprak uçlarında nem kaybı ve sararma.
 
 ### 💊 3. TEDAVİ VE BAKIM REÇETESİ
-* **Ev Tipi Doğal Çözüm (0 ₺ Maliyet):** 1 litre dinlenmiş suya yarım çay kaşığı karbonat ve 2 damla saf zeytinyağı damlatarak yapraklara fısfıslayın. Bu karışım gözenekleri açar ve zararlı sporların tutunmasını engeller.
-* **Toprak Bakımı:** Saksı altındaki tabağı kontrol edin. Tabakta sürekli biriken su kökleri boğar; tabağa dolan fazla suyu her sulamadan 15 dakika sonra boşaltın.
-* **Pahalı İlaç Uyarısı:** Bu evrede kesinlikle sentetik kimyasal zirai ilaç kullanmayınız; bitkiniz genç olduğu için yaprakları yakabilir.
+{tedavi}
+* **Toprak Bakımı:** Sulamadan 15 dakika sonra saksı tabağındaki biriken fazla suyu dökünüz; kök çürümesini önleyiniz.
+* **Pahalı İlaç Uyarısı:** Bu evrede kimyasal tarım ilacı almayınız; sorun parazit değil, sıcaklık ve sulama dengesizliğidir.
 
 ### 💧 4. SULAMA REHBERİ ({ilce.upper()} KOŞULLARI)
 * **Günün En Uygun Sulama Saati:** {saat_oneri}
-* **Sulama Aralığı:** Toprağın üstten 2-3 cm derinliği parmağınızla kontrol edildiğinde tamamen kuru hissedilmedikçe su vermeyiniz (yaklaşık 3-4 günde bir).
-* **Buharlaşma Uyarısı:** Batman'ın anlık kuru sıcağında gündüz su vermek şok etkisi yaratır; serin saatleri tercih ediniz."""
+* **Sulama Aralığı:** Toprağın üstten 2-3 cm derinliği parmağınızla kontrol edildiğinde tamamen kuru hissedilmedikçe su vermeyiniz.
+* **Buharlaşma Uyarısı:** Batman'ın kuru sıcağında gündüz su vermeyiniz; verilen su köke gitmeden buharlaşır ve kökleri yakar."""
 
 # --- ANA EKRAN ---
 col1, col2 = st.columns([1, 1.1])
@@ -185,15 +205,16 @@ with col1:
         
     st.markdown("</div>", unsafe_allow_html=True)
 
-    hasar_puani = 18.5
+    hasar_puani = 0.0
+    bitki_puani = 0.0
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        harita_img, hasar_puani = bitki_saglik_haritasi(image)
+        harita_img, hasar_puani, bitki_puani = bitki_saglik_haritasi(image)
         tab1, tab2 = st.tabs(["🖼️ Normal Fotoğraf", "🟢 Canlılık / Hasar Haritası"])
         with tab1:
             st.image(image, caption="Yüklenen Fotoğraf", use_container_width=True)
         with tab2:
-            st.image(harita_img, caption=f"Yeşil: Sağlıklı | Kırmızı: Hasarlı Doku (%{hasar_puani:.1f})", use_container_width=True)
+            st.image(harita_img, caption=f"Yeşil Doku: %{bitki_puani:.1f} | Hasarlı Bölge: %{hasar_puani:.1f}", use_container_width=True)
 
 # SAĞ TARAF: TEŞHİS, ÇÖZÜM VE KAZANÇ REÇETESİ
 with col2:
@@ -204,8 +225,11 @@ with col2:
         if st.button("🔍 Bitkiyi Teşhis Et ve Çözümü Göster", type="primary"):
             with st.spinner("Görüntü ve hava verileri işleniyor..."):
                 rapor = ""
-                # 1. Aşama: Canlı API Bağlantısını Dene
-                if api_key and not api_key.startswith("AQ."):
+                raw_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+                api_key = str(raw_key).strip().replace('"', '').replace("'", '').replace('\n', '').replace('\r', '')
+
+                # 1. Aşama: Canlı API Bağlantısını Dene (Varsa)
+                if api_key.startswith("AIzaSy"):
                     try:
                         buffered = io.BytesIO()
                         image.save(buffered, format="JPEG")
@@ -213,9 +237,11 @@ with col2:
                         hava_bilgisi = f"{hava_verisi['sicaklik']}°C, Nem: %{hava_verisi['nem']}, Rüzgar: {hava_verisi['ruzgar']} km/s"
                         
                         prompt_text = f"""
-                        Ziraat uzmanı gibi davran. Yabancı terimler veya formüller kullanma.
-                        Konum: {secilen_ilce} / Batman
-                        Hava Durumu: {hava_bilgisi}
+                        Fotoğrafı incele. Eğer görselde bir bitki, yaprak veya tarımsal öge YOKSA (örneğin insan, bardak, masa, duvar vb. ise) sadece şunu yaz:
+                        'BITKI_DEGIL'
+                        
+                        Eğer bir bitkiyse ziraat uzmanı gibi davran. Yabancı terimler veya formüller kullanma.
+                        Konum: {secilen_ilce} / Batman. Hava Durumu: {hava_bilgisi}
                         Şu 4 başlığı sade bir dille yaz:
                         1. 🏷️ BİTKİ VE YERİ (Saksı mı tarla mı?)
                         2. 🔍 NE SORUNU VAR? (Hastalık/zararlı nedir?)
@@ -224,46 +250,51 @@ with col2:
                         """
                         payload = {"contents": [{"parts": [{"text": prompt_text}, {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]}
                         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-                        res = requests.post(url, headers={"Content-Type": "application/json"}, data=json.dumps(payload), timeout=8)
+                        res = requests.post(url, headers={"Content-Type": "application/json"}, data=json.dumps(payload), timeout=5)
                         data = res.json()
                         if "candidates" in data:
-                            rapor = data["candidates"][0]["content"]["parts"][0]["text"]
+                            gelen_metin = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                            rapor = gelen_metin
                     except Exception:
                         rapor = ""
                 
-                # 2. Aşama: Canlı API yanıt vermezse veya token kilitliyse kesintisiz yerel motoru çalıştır
+                # 2. Aşama: API yoksa veya başarısızsa akıllı yerel analiz çalışır
                 if not rapor:
-                    rapor = yerel_recete_uret(secilen_ilce, hava_verisi, hasar_puani)
+                    rapor = dinamik_recete_uret(secilen_ilce, hava_verisi, hasar_puani, bitki_puani)
 
-                st.success("✅ Teşhis Tamamlandı!")
-                
-                # Doğrudan Kâr ve Tasarruf Metrikleri
-                m1, m2 = st.columns(2)
-                m1.metric("Elektrik / Pompa Tasarrufu", "%30'a Varan", "Buharlaşma Önleme")
-                m2.metric("Cihaz / Sensör Maliyeti", "0 ₺", "Sıfır Ekipman Masrafı")
-                
-                st.markdown("---")
-                st.markdown(rapor)
-                
-                st.markdown("""
-                <div class="kar_kutusu">
-                    <h4 style="margin-top:0; color:#6ee7b7;">💰 Bu Reçetenin Size Sağladığı Doğrudan Kâr:</h4>
-                    <ul style="margin-bottom:0; font-size:14px; line-height:1.6;">
-                        <li><b>Elektrik ve Mazot Tasarrufu:</b> Gündüz buharlaşacak su için kuyu motorunu çalıştırmaz; faturada %30'a varan net tasarruf sağlar.</li>
-                        <li><b>0 ₺ Donanım Masrafı:</b> Binlerce liralık toprak nem sensörü almadan telefonunuzla aynı kararı alırsınız.</li>
-                        <li><b>İlaç İsrafını Önleme:</b> Yanlış ve pahalı zirai ilaç alımını engeller; ev bitkilerinde bedava doğal yöntemleri gösterir.</li>
-                        <li><b>Hasat Kaybını Durdurma:</b> Aşırı sulamadan kaynaklanan kök çürümesini vaktinde engelleyerek veriminizi korur.</li>
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.download_button(
-                    label="📥 Bu Reçeteyi Telefona İndir",
-                    data=rapor,
-                    file_name=f"AquaSmart_{secilen_ilce}_Recete.txt",
-                    mime="text/plain"
-                )
+                # BİTKİ OLMAMA KONTROLÜ
+                if "BITKI_DEGIL" in rapor:
+                    st.warning("⚠️ **Görselde Canlı Bitki Tespit Edilemedi!**\n\nYüklediğiniz fotoğrafta klorofil içeren yaprak veya bitkisel bir doku bulunamadı. Lütfen doğrudan bir bitki veya yaprak fotoğrafı çekip tekrar deneyiniz.")
+                else:
+                    st.success("✅ Teşhis Tamamlandı!")
+                    
+                    # Doğrudan Kâr ve Tasarruf Metrikleri
+                    m1, m2 = st.columns(2)
+                    m1.metric("Elektrik / Pompa Tasarrufu", "%30'a Varan", "Buharlaşma Önleme")
+                    m2.metric("Cihaz / Sensör Maliyeti", "0 ₺", "Sıfır Ekipman Masrafı")
+                    
+                    st.markdown("---")
+                    st.markdown(rapor)
+                    
+                    st.markdown("""
+                    <div class="kar_kutusu">
+                        <h4 style="margin-top:0; color:#6ee7b7;">💰 Bu Reçetenin Size Sağladığı Doğrudan Kâr:</h4>
+                        <ul style="margin-bottom:0; font-size:14px; line-height:1.6;">
+                            <li><b>Elektrik ve Mazot Tasarrufu:</b> Gündüz buharlaşacak su için kuyu motorunu boşuna çalıştırmaz; faturada %30'a varan tasarruf sağlar.</li>
+                            <li><b>0 ₺ Donanım Masrafı:</b> Binlerce liralık toprak nem sensörü almadan telefonunuzla aynı kararı alırsınız.</li>
+                            <li><b>İlaç İsrafını Önleme:</b> Yanlış ve pahalı zirai ilaç alımını engeller; ev bitkilerinde bedava doğal yöntemleri gösterir.</li>
+                            <li><b>Hasat Kaybını Durdurma:</b> Aşırı sulamadan kaynaklanan kök çürümesini vaktinde engelleyerek veriminizi korur.</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.download_button(
+                        label="📥 Bu Reçeteyi Telefona İndir",
+                        data=rapor,
+                        file_name=f"AquaSmart_{secilen_ilce}_Recete.txt",
+                        mime="text/plain"
+                    )
     else:
         st.info("👈 Soldan bir fotoğraf yükleyin veya çekin.")
     
